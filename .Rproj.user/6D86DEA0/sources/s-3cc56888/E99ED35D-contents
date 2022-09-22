@@ -1,0 +1,71 @@
+####singleR####
+#####方案一，利用构建好的索引注释#######
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+
+BiocManager::install("SingleR")
+###加载包
+#通过存在的参考索引#######
+library(celldex)
+#加载数据，构建索引
+hpca.se <- HumanPrimaryCellAtlasData()
+#查看数据格式
+#19363个基因以及713个样本
+hpca.se
+###提取我们需要注释的细胞#####
+library(scRNAseq)
+hESCs <- LaMannoBrainData('human-es')
+#提取100个细胞
+hESCs <- hESCs[,1:100]
+###通过提取identifies marker genes来计算每个分群的分数，得分最高的进行分配分群
+###使用singleR来注释细胞######
+library(SingleR)
+pred.hesc <- SingleR(test = hESCs, ref = hpca.se, assay.type.test=1,
+                     labels = hpca.se$label.main)
+####展示每个细胞的注释细胞
+pred.hesc
+#展示每一种细胞类型的个数
+table(pred.hesc$labels)
+#####方案二，利用已经注释好的数据来注释另外一个数据集########
+###加载包
+library(scRNAseq)
+#构建已经注释好的文件
+sceM <- MuraroPancreasData()
+# 需要进行常规的质控流程，演示目的，未有该步骤
+# 去除NA值
+sceM <- sceM[,!is.na(sceM$label)]
+#展示标签
+sceM; sceM$label
+# SingleR() expects reference datasets to be normalized and log-transformed.
+library(scuttle)
+#log化
+sceM <- logNormCounts(sceM)
+#构建测试的数据集
+sceG <- GrunPancreasData()
+sceG <- sceG[,colSums(counts(sceG)) > 0] # Remove libraries with no counts.
+sceG <- logNormCounts(sceG) 
+sceG <- sceG[,1:100] #提取前100个细胞
+#####进行细胞注释####
+pred.grun <- SingleR(test=sceG, ref=sceM, labels=sceM$label, de.method="wilcox")
+table(pred.grun$labels)
+####使用heatmap展示每一个细胞的得分
+#每一列是细胞，每一行是不同类型的得分
+plotScoreHeatmap(pred.grun)
+####展示每个细胞的delta值
+plotDeltaDistribution(pred.grun, ncol = 3)
+##展示低质量的细胞，并进行pruned的细胞数
+summary(is.na(pred.grun$pruned.labels))
+######提取细胞分类的marker基因###
+all.markers <- metadata(pred.grun)$de.genes
+sceG$labels <- pred.grun$labels
+# 展示Beta cell-related markers的表达值热图
+library(scater)
+plotHeatmap(sceG, order_columns_by="labels",
+            features=unique(unlist(all.markers$beta))) 
+
+
+
+
+
+
+

@@ -1,0 +1,67 @@
+#####对GSE159677进行数据质控###
+##===数据质控===##
+dir.create("QC")
+scRNA <- merge(scRNAlist[[1]], scRNAlist[2:length(scRNAlist)])
+scRNA$proj <- rep("10x", ncol(scRNA))
+#scRNAlist <- SplitObject(scRNA, split.by = "orig.ident")
+head(scRNA@meta.data)
+nrow(scRNA@meta.data)
+##绘制质控小提琴图
+#设置可能用到的主题
+theme.set1 = theme(axis.title.x=element_blank(), 
+                   axis.text.x=element_blank(), 
+                   axis.ticks.x=element_blank())
+theme.set2 = theme(axis.title.x=element_blank())
+#设置绘图元素
+plot.featrures = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.rb")
+group = "orig.ident"
+#group = "proj"
+#质控前小提琴图
+plots = list()
+for(i in seq_along(plot.featrures)){
+  plots[[i]] = VlnPlot(scRNA, group.by=group, pt.size = 0,
+                       features = plot.featrures[i]) + theme.set2 + NoLegend()}
+violin <- wrap_plots(plots = plots, nrow=2)    
+ggsave("QC/vlnplot_before_qc.pdf", plot = violin, width = 10, height = 8) 
+ggsave("QC/vlnplot_before_qc.png", plot = violin, width = 10, height = 8)  
+
+##设置质控标准
+minGene=500
+maxGene=4000
+pctMT=10
+pctRB=10
+
+##数据质控并绘制小提琴图
+scRNA <- subset(scRNA, subset = nFeature_RNA > minGene & nFeature_RNA < 
+                  maxGene & percent.mt < pctMT & percent.rb < pctRB)
+plots = list()
+for(i in seq_along(plot.featrures)){
+  plots[[i]] = VlnPlot(scRNA, group.by=group, pt.size = 0,
+                       features = plot.featrures[i]) + theme.set2 + NoLegend()}
+violin <- wrap_plots(plots = plots, nrow=2)     
+ggsave("QC/vlnplot_after_qc.pdf", plot = violin, width = 10, height = 8) 
+ggsave("QC/vlnplot_after_qc.png", plot = violin, width = 10, height = 8)
+
+##===细胞周期评分===##
+scRNA <- NormalizeData(scRNA) %>% FindVariableFeatures() %>%
+  ScaleData(features = rownames(scRNA))
+
+##人源样本的细胞周期评分
+if(T){
+  g2m_genes <- cc.genes$g2m.genes
+  g2m_genes <- CaseMatch(search=g2m_genes, match=rownames(scRNA))
+  s_genes <- cc.genes$s.genes    
+  s_genes <- CaseMatch(search=s_genes, match=rownames(scRNA))
+  scRNA <- CellCycleScoring(scRNA, g2m.features=g2m_genes, s.features=s_genes)
+  tmp <- RunPCA(scRNA, features = c(g2m_genes, s_genes), verbose = F)
+  p <- DimPlot(tmp, reduction = "pca", group.by = "orig.ident")
+  ggsave("QC/CellCycle_pca.png", p, width = 8, height = 6)
+  rm(tmp)
+}
+###结果重叠，可以继续
+
+
+
+
+
+

@@ -1,0 +1,35 @@
+library(tidyverse)
+#读取数据
+scRNA$seurat_clusters=scRNA$integrated_snn_res.0.4
+
+
+
+cluster_marker <- read_csv("CellType/ClusterMarker.csv")
+deg_4 <- cluster_marker %>% filter(cluster==4) %>% 
+  pull(gene)
+#参考数据集
+cluster_wirka <- read_csv("revision/TCF21_human.csv")
+table(cluster_wirka$Cluster)
+deg_SMC <- cluster_wirka %>% filter(Cluster=="SMC") %>% 
+  pull(gene)
+deg_Fibromyocyte <- cluster_wirka %>% filter(Cluster=="Fibromyocyte") %>% 
+  pull(gene)
+deg_Fibroblast1 <- cluster_wirka %>% filter(Cluster=="Fibroblast") %>% 
+  pull(gene)
+deg_Fibroblast2 <- cluster_wirka %>% filter(Cluster=="Fibroblast 2") %>% 
+  pull(gene)
+#取交集
+intersect(deg_4,deg_SMC)
+
+intersect(deg_4,deg_Fibromyocyte)
+intersect(deg_4,deg_Fibroblast1)
+intersect(deg_4,deg_Fibroblast2)
+#####2.对VSMC不同亚型进行差异marker分析######
+Idents(scRNAsub)="celltype"
+markers <- FindAllMarkers(scRNAsub, logfc.threshold = 0.25, min.pct = 0.1, 
+                          only.pos = TRUE)
+markers <- markers[!grepl("MT-", 
+                  markers$gene, ignore.case = F),]
+markers <- markers[!grepl("^RP[SL]", 
+                          markers$gene, ignore.case = F),]
+write.csv(markers,file = "revision/celltypeMarker_VSMC.csv")

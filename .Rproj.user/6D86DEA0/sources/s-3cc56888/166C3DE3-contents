@@ -1,0 +1,1326 @@
+
+##=================================================================##
+##==================第一节：创建Seurat对象并质控===================##
+##=================================================================##
+if(T){
+  
+library(Seurat)
+library(tidyverse)
+library(patchwork)
+rm(list=ls())
+
+
+##===创建seurat对象列表===##
+##设置文件目录与样本名称
+dir <- dir("GSE139324/")
+dir <- paste0("GSE139324/", dir)
+#查看文件顺序
+dir                         
+#按文件顺序给样本命名，名称不要以数字开头，中间不能有空格 
+samples_name = c('HNC01PBMC', 'HNC01TIL', 'HNC10PBMC', 'HNC10TIL', 'HNC20PBMC',
+                 'HNC20TIL',  'PBMC1', 'PBMC2', 'Tonsil1', 'Tonsil2')
+
+##使用循环命令批量创建seurat对象
+scRNAlist <- list()
+for(i in 1:length(dir)){
+  counts <- Read10X(data.dir = dir[i])
+  #不设置min.cells过滤基因会导致CellCycleScoring报错：
+  #Insufficient data values to produce 24 bins.  
+  scRNAlist[[i]] <- CreateSeuratObject(counts, project=samples_name[i],
+                                       min.cells=3, min.features = 200)
+  #给细胞barcode加个前缀，防止合并后barcode重名
+  scRNAlist[[i]] <- RenameCells(scRNAlist[[i]], add.cell.id = samples_name[i])   
+  #计算线粒体基因比例，小鼠用第二行命令
+  if(T){    
+    scRNAlist[[i]][["percent.mt"]] <- PercentageFeatureSet(scRNAlist[[i]], pattern = "^MT-") 
+    #scRNAlist[[i]][["percent.mt"]] <- PercentageFeatureSet(scRNAlist[[i]], pattern = "^mt-")
+  }
+  #计算核糖体基因比例，小鼠用第二行命令
+  if(T){
+    scRNAlist[[i]][["percent.rb"]] <- PercentageFeatureSet(scRNAlist[[i]], pattern = "^RB[SL]")
+    #scRNAlist[[i]][["percent.rb"]] <- PercentageFeatureSet(scRNAlist[[i]], pattern = "^Rb[sl]")
+  }
+}
+#给列表命名并保存数据
+names(scRNAlist) <- samples_name
+#save(scRNAlist, file = "scRNAlist0.Rdata")
+saveRDS(scRNAlist, file = "scRNAlist0.rds")
+
+
+##===数据质控===##
+dir.create("QC")
+scRNA <- merge(scRNAlist[[1]], scRNAlist[2:length(scRNAlist)])
+scRNA$proj <- rep("10x", ncol(scRNA))
+#scRNAlist <- SplitObject(scRNA, split.by = "orig.ident")
+head(scRNA@meta.data)
+
+##绘制质控小提琴图
+#设置可能用到的主题
+theme.set1 = theme(axis.title.x=element_blank(), 
+                   axis.text.x=element_blank(), 
+                   axis.ticks.x=element_blank())
+theme.set2 = theme(axis.title.x=element_blank())
+#设置绘图元素
+plot.featrures = c("nFeature_RNA", "nCount_RNA", "percent.mt", "percent.rb")
+group = "orig.ident"
+#group = "proj"
+#质控前小提琴图
+plots = list()
+for(i in seq_along(plot.featrures)){
+  plots[[i]] = VlnPlot(scRNA, group.by=group, pt.size = 0,
+               features = plot.featrures[i]) + theme.set2 + NoLegend()}
+violin <- wrap_plots(plots = plots, nrow=2)    
+ggsave("QC/vlnplot_before_qc.pdf", plot = violin, width = 10, height = 8) 
+ggsave("QC/vlnplot_before_qc.png", plot = violin, width = 10, height = 8)  
+
+##设置质控标准
+minGene=500
+maxGene=4000
+pctMT=10
+pctRB=10
+
+##数据质控并绘制小提琴图
+scRNA <- subset(scRNA, subset = nFeature_RNA > minGene & nFeature_RNA < 
+                  maxGene & percent.mt < pctMT & percent.rb < pctRB)
+plots = list()
+for(i in seq_along(plot.featrures)){
+  plots[[i]] = VlnPlot(scRNA, group.by=group, pt.size = 0,
+               features = plot.featrures[i]) + theme.set2 + NoLegend()}
+violin <- wrap_plots(plots = plots, nrow=2)     
+ggsave("QC/vlnplot_after_qc.pdf", plot = violin, width = 10, height = 8) 
+ggsave("QC/vlnplot_after_qc.png", plot = violin, width = 10, height = 8)
+
+
+##===细胞周期评分===##
+scRNA <- NormalizeData(scRNA) %>% FindVariableFeatures() %>%
+         ScaleData(features = rownames(scRNA))
+
+##人源样本的细胞周期评分
+if(T){
+  g2m_genes <- cc.genes$g2m.genes
+  g2m_genes <- CaseMatch(search=g2m_genes, match=rownames(scRNA))
+  s_genes <- cc.genes$s.genes    
+  s_genes <- CaseMatch(search=s_genes, match=rownames(scRNA))
+  scRNA <- CellCycleScoring(scRNA, g2m.features=g2m_genes, s.features=s_genes)
+  tmp <- RunPCA(scRNA, features = c(g2m_genes, s_genes), verbose = F)
+  p <- DimPlot(tmp, reduction = "pca", group.by = "orig.ident")
+  ggsave("QC/CellCycle_pca.png", p, width = 8, height = 6)
+  rm(tmp)
+}
+
+##小鼠样本的细胞周期评分
+if(F){
+  load("resource/mouse_cc_genes.Rdata")
+  g2m_genes <- CaseMatch(search=mm.g2m_genes, match=rownames(scRNA))
+  s_genes <- CaseMatch(search=mm.s_genes, match=rownames(scRNA))
+  scRNA <- CellCycleScoring(scRNA, g2m.features=g2m_genes, s.features=s_genes)
+  tmp <- RunPCA(scRNA, features = c(g2m_genes, s_genes), verbose = F)
+  p <- DimPlot(tmp, reduction = "pca", group.by = "orig.ident")
+  ggsave("QC/CellCycle_pca.png", p, width = 8, height = 6)
+  rm(tmp)
+}
+
+##===线粒体和核糖体影响作图===##
+##查看线粒体对样本的影响，可直接用于小鼠
+mt.genes <- grep("^MT-", rownames(scRNA), value=T, ignore.case=T)
+tmp <- RunPCA(scRNA, features = mt.genes, verbose = F)
+p <- DimPlot(tmp, reduction = "pca", group.by = "orig.ident")
+ggsave("QC/mito_pca.png", p, width = 8, height = 6)
+rm(tmp)
+
+##查看核糖体对样本的影响，可直接用于小鼠
+rb.genes <- grep("^RP[SL]", rownames(scRNA), value=T, ignore.case=T)
+tmp <- RunPCA(scRNA, features = rb.genes, verbose = F)
+p <- DimPlot(tmp, reduction = "pca", group.by = "orig.ident")
+ggsave("QC/ribo_pca.png", p, width = 8, height = 6)
+rm(tmp)
+
+##保存质控后的结果
+#saveRDS(scRNA, "scRNA.rds")
+save(scRNA, file = "scRNA_QC.Rdata")
+}
+
+##=================================================================##
+##==================第二节：数据概览与批次校正=====================##
+##=================================================================##
+if(T){
+
+library(Seurat)
+library(tidyverse)
+library(SingleR)
+library(harmony)
+library(patchwork)
+dir.create("Overview")
+rm(list=ls())
+
+##===数据概览===##
+load("scRNA_QC.Rdata")
+
+##降维聚类
+scRNA <- RunPCA(scRNA, verbose = F)
+ElbowPlot(scRNA, ndims = 50)
+pc.num=1:30
+scRNA <- scRNA %>% RunTSNE(dims=pc.num) %>% RunUMAP(dims=pc.num) %>%
+         FindNeighbors(dims = pc.num) %>% FindClusters(resolution=0.8)
+
+##SingleR鉴定细胞类型
+source("Resource/function.R")
+refdata <- get(load("Resource/SingleR_ref/ref_BE_259s.RData"))
+scRNA <- cell_identify(scRNA, refdata, output = "Overview")
+
+##tSNE图展示结果
+p1 <- DimPlot(scRNA, reduction = "tsne", label = T) + NoLegend()
+p2 <- DimPlot(scRNA, reduction = "tsne", label = T,
+              group.by = "SingleR") + NoLegend()
+pc = p1|p2
+ggsave("Overview/tSNE_overview.png", pc, width = 8, height = 4)
+
+##UMAP图展示结果
+p1 <- DimPlot(scRNA, reduction = "umap", label = T) + NoLegend()
+p2 <- DimPlot(scRNA, reduction = "umap", label = T,
+              group.by = "SingleR") + NoLegend()
+pc = p1|p2
+ggsave("Overview/UMAP_overview.png", pc, width = 8, height = 4)
+
+##查看批次效应
+p1 <- DimPlot(scRNA, reduction = "tsne", group.by = "orig.ident")
+p2 <- DimPlot(scRNA, reduction = "umap", group.by = "orig.ident")
+pc = p1 + p2 + plot_layout(guides = "collect")
+ggsave("Overview/batch_overview.png", pc, width = 8, height = 4)
+
+##查看细胞周期
+#细胞周期评分绘制小提琴图
+theme.set2 = theme(axis.title.x=element_blank())
+plot.featrures = c("S.Score", "G2M.Score")
+plots = list()
+for(i in seq_along(plot.featrures)){
+  plots[[i]] = VlnPlot(scRNA, group.by="seurat_clusters", pt.size = 0,
+                       features = plot.featrures[i]) + theme.set2 + NoLegend()}
+violin <- wrap_plots(plots = plots, nrow=2)    
+ggsave("Overview/CellCycle_violin.png", plot = violin, width = 8, height = 6)  
+
+#绘制tsne和umap图
+p1 <- DimPlot(scRNA, reduction = "tsne", group.by = "Phase")
+p2 <- DimPlot(scRNA, reduction = "umap", group.by = "Phase")
+pc = p1 + p2 + plot_layout(guides = "collect")
+ggsave("Overview/CellCycle_dimplot.png", pc, width = 8, height = 4)
+
+##保存结果
+save(scRNA, file = "Overview/scRNA_overview.Rdata")
+
+
+##===SCT标准化与批次校正===##
+dir.create("Harmony")
+rm(list=ls())
+load("scRNA_QC.Rdata")
+
+##SCT标准化数据
+scRNA <- SCTransform(scRNA, return.only.var.genes = F, 
+                     vars.to.regress = c("S.Score", "G2M.Score"))
+
+##使用harmony整合数据
+scRNA <- RunPCA(scRNA, npcs=50, verbose=FALSE)
+scRNA <- RunHarmony(scRNA, group.by.vars="orig.ident", assay.use="SCT")
+#按其他分类校正
+if(F){
+  scRNA$batches <- scRNA$orig.ident
+  scRNA$batches <- recode(scRNA$batches, 
+                   "HNC01PBMC" = "batch1", 
+                   "HNC01TIL" = "batch1",
+                   "HNC10PBMC" = "batch2",
+                   "HNC10TIL" = "batch2",
+                   "HNC20PBMC" = "batch3",
+                   "HNC20TIL" = "batch3",
+                   "PBMC1" = "batch4",
+                   "PBMC2" = "batch4",
+                   "Tonsil1" = "batch5",
+                   "Tonsil2" = "batch5")
+  scRNA <- RunHarmony(scRNA, group.by.vars="batches", assay.use="SCT")
+}
+ElbowPlot(scRNA, ndims = 50)
+pc.num=1:40
+
+##===降维聚类与可视化===##
+##非线性降维与聚类
+scRNA <- RunTSNE(scRNA, reduction="harmony", dims=pc.num) %>% 
+         RunUMAP(reduction="harmony", dims=pc.num) %>%
+         FindNeighbors(reduction="harmony", dims=pc.num) %>% 
+         FindClusters(resolution=0.8)
+table(scRNA$seurat_clusters)
+
+##查看harmony的整合效果
+p1 <- DimPlot(scRNA, reduction = "tsne", group.by = "orig.ident")
+p2 <- DimPlot(scRNA, reduction = "umap", group.by = "orig.ident")
+pc = p1 + p2 + plot_layout(guides = "collect")
+ggsave("Harmony/Harmony_integr.png", pc, width = 8, height = 4)
+#使用分面图查看效果
+p <- DimPlot(scRNA, reduction = "umap", group.by = "orig.ident", 
+             split.by = "orig.ident", ncol = 3) + NoLegend()
+ggsave("Harmony/Harmony_facet.png", p, width = 9, height = 12)
+
+##SingleR鉴定细胞类型
+source("Resource/function.R")
+refdata <- get(load("Resource/SingleR_ref/ref_BE_259s.RData"))
+scRNA <- cell_identify(scRNA, refdata, output = "Harmony")
+
+##tSNE图展示结果
+p1 <- DimPlot(scRNA, reduction = "tsne", label = T) + NoLegend()
+p2 <- DimPlot(scRNA, reduction = "tsne", label = T,
+              group.by = "SingleR") + NoLegend()
+pc = p1|p2
+ggsave("Harmony/tSNE_harmony.png", pc, width = 8, height = 4)
+
+##UMAP图展示结果
+p1 <- DimPlot(scRNA, reduction = "umap", label = T) + NoLegend()
+p2 <- DimPlot(scRNA, reduction = "umap", label = T,
+              group.by = "SingleR") + NoLegend()
+pc = p1|p2
+ggsave("Harmony/UMAP_harmony.png", pc, width = 8, height = 4)
+
+##保存结果
+save(scRNA, file = "scRNA_harmony.Rdata")
+}
+
+##=================================================================##
+##==================第三节：细胞类型鉴定与可视化===================##
+##=================================================================##
+if(T){
+
+library(Seurat)
+library(tidyverse)
+library(patchwork)
+dir.create("CellType")
+rm(list=ls())
+source("Resource/function.R")
+scRNA <- get(load("scRNA_harmony.Rdata"))
+
+##===软件预测===##
+## SingleR预测
+refdata <- get(load("Resource/SingleR_ref/ref_BE_259s.RData"))
+scRNA <- cell_identify(scRNA, refdata, output = "CellType")
+p1 <- DimPlot(scRNA, reduction = "umap", label = T) + NoLegend()
+p2 <- DimPlot(scRNA, reduction = "umap", group.by = "SingleR", label = T,
+              repel = T) + ggtitle("Predicted by SingleR") + NoLegend()
+p <- p1 + p2
+ggsave("CellType/CellType_SingleR.png", p, width = 10, height = 4)
+
+## Azimuth预测
+sc.test <- scRNA@assays$RNA@counts   #APP会做SCT标准化
+saveRDS(sc.test, "sc.test.rds")      #保存为rds格式上传
+#上传http://azimuth.satijalab.org/app/azimuth
+predictions <- read.delim('CellType/azimuth_pred.tsv', row.names = 1)
+scRNA <- AddMetaData(scRNA, metadata = predictions)
+p1 <- DimPlot(scRNA, reduction = "umap", label = T) + NoLegend()
+p2 <- DimPlot(scRNA, reduction="umap", group.by="predicted.id", label=T,
+              label.size = 2) + ggtitle("Predicted by Azimuth") + NoLegend()
+p <- p1 + p2
+ggsave("CellType/CellType_Azimuth.png", p, width = 10, height = 4)
+
+##===Marker基因鉴定===##
+##提取各个Cluster的marker genes
+ClusterMarker <- FindAllMarkers(scRNA, assay = "SCT", slot = "data", only.pos = T,
+                                logfc.threshold = 0.25, min.pct = 0.1)
+ClusterMarker <- ClusterMarker[,c(7,1:6)]
+write.csv(ClusterMarker,'CellType/ClusterMarker.csv', row.names=F)
+#ClusterMarker <- read.csv('CellType/ClusterMarker.csv')
+#提取差异显著的marker genes
+top = 15   #可根据需要调整
+TopMarkers1 <- ClusterMarker %>% filter(p_val_adj == 0) %>% group_by(cluster) %>% 
+               top_n(n = top, wt = avg_logFC)
+TopMarkers2 <- ClusterMarker %>% filter(p_val_adj < 0.01) %>% group_by(cluster) %>%
+               top_n(n = top, wt = avg_logFC)
+TopMarkers <- rbind(TopMarkers1, TopMarkers2) %>% unique.matrix() %>% arrange(cluster)
+write.csv(TopMarkers,'CellType/TopMarkers.csv', row.names=F)
+
+##提取没有核糖体的Markers
+ClusterMarker_noRibo <- ClusterMarker[!grepl("^RP[SL]", 
+                                      ClusterMarker$gene, ignore.case = F),]
+top = 15   #可根据需要调整
+TopMarkers1 <- ClusterMarker_noRibo %>% filter(p_val_adj == 0) %>% 
+               group_by(cluster) %>% top_n(n = top, wt = avg_logFC)
+TopMarkers2 <- ClusterMarker_noRibo %>% filter(p_val_adj < 0.01) %>% 
+               group_by(cluster) %>% top_n(n = top, wt = avg_logFC)
+TopMarkers_noRibo <- rbind(TopMarkers1, TopMarkers2) %>% unique.matrix() %>% 
+               arrange(cluster)
+write.csv(TopMarkers_noRibo,'CellType/TopMarkers_noRibo.csv', row.names=F)
+
+##导出一个方便对比的表格(每行一个cluster的marker gene)
+TopMarkers2Lines(data = TopMarkers_noRibo, output = "CellType")
+
+##辅助查找marker基因
+source("Resource/MarkerGeneList.R")
+source("Resource/function.R")
+#TopMarkers_noRibo <- read.csv('CellType/TopMarkers_noRibo.csv')
+MatchMarkerGene(data=TopMarkers_noRibo, output = "CellType")
+
+##===人工鉴定===##
+##导入人工鉴定结果
+cell.type <- c("B cells", "NK", "T_naive", "Monocytes", "CD4 T_em", "T_naive", 
+               "T_reg", "CD8_Trm", "CD4 T_em", "Macrophage", "CD8_T_naive", 
+               "B cells", "T cells", "T_naive", "B cells", "Macrophage", 
+               "B_plasma", "CD16 Monocytes", "B cells", "pDC", "B_plasma", 
+               "Cyc NK&T", "DC", "CD16 Monocytes", "Monocytes")
+Idents(scRNA) <- "seurat_clusters"
+names(cell.type) <- levels(scRNA)
+scRNA <- RenameIdents(scRNA, cell.type)
+scRNA$celltype <- Idents(scRNA)
+Idents(scRNA) <- "seurat_clusters"
+
+##结果用UMAP图展示
+p1 <- DimPlot(scRNA, reduction = "umap", label = T) + NoLegend()
+p2 <- DimPlot(scRNA, reduction = "umap", label = T, label.size = 2.5,
+              group.by = "celltype") + NoLegend()
+pc = p1|p2
+ggsave("CellType/CellType_Custom.png", pc, width = 10, height = 4)
+
+##保存结果
+save(scRNA, file = "scRNA_classify.Rdata")
+
+##===结果可视化===##
+##Stackbar细胞丰度柱状图
+tmp <- select(scRNA@meta.data, c("orig.ident", "celltype"))
+df <- data.frame()
+for(i in unique(tmp$orig.ident)){
+  df_i <- subset(tmp, tmp$orig.ident==i) %>% pull(celltype) %>% table()
+  df_i <- data.frame(sample=rep(i, length(df_i)), value=df_i)
+  names(df_i) <- c("sample", "celltype", "value")
+  df <- rbind(df, df_i)
+}
+source("Resource/function.R")
+#按样本统计细胞类型
+p <- ggplot(df, aes(x=sample, y=value, fill=celltype)) + 
+     geom_bar(stat= "identity", position = "fill") + 
+     scale_fill_manual(values = col21) +
+     labs(x = 'Samples', y = 'Relative Abundance', title = 'Samples composition') +
+     theme(panel.grid = element_blank(), panel.background = element_blank(), 
+           axis.text.x = element_text(angle=45))
+ggsave('CellType/Stackbar_celltype.png', p, width = 8, height = 4.5)
+#按细胞类型统计样本
+p <- ggplot(df, aes(x=celltype, y=value, fill=sample)) + 
+     geom_bar(stat= "identity", position = "fill") + 
+     scale_fill_manual(values = col21) +
+     labs(x = 'Cell type', y = 'Relative Abundance', title = 'Source of cell type') +
+     theme(panel.grid = element_blank(), panel.background = element_blank(), 
+           axis.text.x = element_text(angle=45))
+ggsave('CellType/Stackbar_sample.png', p, width = 8, height = 4.5)
+
+##Marker基因可视化
+Idents(scRNA) <- "celltype"
+markers <- c("CD79A", "MS4A1", "GNLY", "NKG7","NOSIP", "CCR7", "CD14", "LYZ", 
+             "IL7R", "LTB", "FOXP3", "CTLA4", "CD8A", "GZMK", "FTL", "APOE",
+             "CD3D", "HLA-DPB1", "CD74", "IRF7", "ITM2C", "STMN1", "TUBA1B", "FCER1A")
+markers <- CaseMatch(markers, rownames(scRNA))
+
+## Featureplot标注marker基因
+p <- FeaturePlot(scRNA, reduction = "umap", features = markers, ncol = 3)
+ggsave("CellType/Markers_features.png", p, width = 7, height = 16)
+
+#Heatmap图
+p <- DoHeatmap(scRNA, features = markers, size = 4)
+ggsave("CellType/Markers_heatmap.png", width = 12, height = 7)
+
+#Marker基因气泡图
+p <- DotPlot(scRNA, features = markers)
+ggsave("CellType/Markers_dotplot.png", width = 12, height = 6)
+
+##Marker基因小提琴图
+p <- VlnPlot(scRNA, features = markers, pt.size = 0, stack = T)
+ggsave("CellType/Markers_vlnplot.png", width = 10, height = 6)
+
+
+##==================提取T细胞子集做亚群鉴定========================##
+##===提取细胞子集===##
+dir.create("Subset")
+Idents(scRNA) <- "seurat_clusters"
+scRNAsub <- subset(scRNA, idents = c(2, 4, 5, 6, 7, 8, 10, 12, 13))
+#可选使用celltype提取
+if(F){
+  names(table(scRNA$celltype))
+  Idents(scRNA) <- "celltype"
+  scRNAsub <- subset(scRNA, idents = c("T_naive", "CD4 T_em", "T_reg", 
+                                       "CD8_Trm", "CD8_T_naive", "T cells"))
+}
+#净化数据
+DefaultAssay(scRNAsub) <- "RNA"
+scRNAsub@assays$SCT <- NULL
+colnames(scRNAsub@meta.data)
+scRNAsub@meta.data <- scRNAsub@meta.data[,c("orig.ident", "nCount_RNA",
+                             "nFeature_RNA", "percent.mt",  "percent.rb","proj",
+                              "S.Score", "G2M.Score", "Phase","celltype")]
+scRNAsub$main.celltype <- scRNAsub$celltype
+scRNAsub$celltype <- NULL
+
+##提取子集之后需要从头分析吗？
+var.all <- VariableFeatures(scRNA, assay = "RNA")
+var.sub <- FindVariableFeatures(scRNAsub, assay = "RNA") %>% 
+           VariableFeatures(assay = "RNA")
+var.share <- intersect(var.all, var.sub)
+length(var.share)
+
+##数据标准化
+#log标准化
+scRNAsub <- NormalizeData(scRNAsub) %>% FindVariableFeatures() %>%
+            ScaleData(features = rownames(scRNAsub))
+#SCT标准化
+scRNAsub <- SCTransform(scRNAsub, return.only.var.genes = F)
+save(scRNAsub, file = "Subset/scRNAsub_SCT.Rdata")
+
+##使用harmony整合数据
+library(harmony)
+scRNAsub <- RunPCA(scRNAsub, npcs=50, verbose=FALSE)
+DimPlot(scRNAsub, reduction = "pca", group.by = "orig.ident")
+scRNAsub <- RunHarmony(scRNAsub, group.by.vars="orig.ident", assay.use="SCT",
+                       max.iter.harmony = 15)
+ElbowPlot(scRNAsub, ndims = 50)
+pc.num=1:35
+
+##降维聚类
+scRNAsub <- RunTSNE(scRNAsub, reduction="harmony", dims=pc.num) %>% 
+            RunUMAP(reduction="harmony", dims=pc.num) %>%
+            FindNeighbors(reduction="harmony", dims=pc.num) %>% 
+            FindClusters(resolution=0.3) %>% FindClusters(resolution=0.5) %>%
+            FindClusters(resolution=0.8) %>% FindClusters(resolution=1.2)
+p1 <- DimPlot(scRNAsub, reduction = "umap", group.by = "SCT_snn_res.0.3", 
+              label = T) + ggtitle("SCT_snn_res.0.3")
+p2 <- DimPlot(scRNAsub, reduction = "umap", group.by = "SCT_snn_res.0.5", 
+              label = T) + ggtitle("SCT_snn_res.0.5")
+p3 <- DimPlot(scRNAsub, reduction = "umap", group.by = "SCT_snn_res.0.8", 
+              label = T) + ggtitle("SCT_snn_res.0.8")
+p4 <- DimPlot(scRNAsub, reduction = "umap", group.by = "SCT_snn_res.1.2", 
+              label = T) + ggtitle("SCT_snn_res.1.2")
+p <- (p1|p2)/(p3|p4)
+ggsave("Subset/Resolution_test.png", p, width = 10, height = 8)
+#查看结果后采用0.5的分辨率
+scRNAsub$seurat_clusters <- scRNAsub$SCT_snn_res.0.5
+Idents(scRNAsub) <- "SCT_snn_res.0.5"
+
+##查看harmony的整合效果
+p1 <- DimPlot(scRNAsub, reduction = "tsne", group.by = "orig.ident")
+p2 <- DimPlot(scRNAsub, reduction = "umap", group.by = "orig.ident")
+pc = p1 + p2 + plot_layout(guides = "collect")
+ggsave("Subset/Harmony_integr.png", pc, width = 8, height = 4)
+#使用分面图查看效果
+p <- DimPlot(scRNAsub, reduction = "umap", group.by = "orig.ident", 
+             split.by = "orig.ident", ncol = 3) + NoLegend()
+ggsave("Subset/Harmony_facet.png", p, width = 9, height = 12)
+
+##保存结果
+save(scRNAsub, file = "Subset/scRNAsub_harmony.Rdata")     
+
+
+##===鉴定数据子集的细胞类型===##
+##提取各个Cluster的marker genes
+ClusterMarker <- FindAllMarkers(scRNAsub, assay = "SCT", slot = "data", only.pos = T,
+                                logfc.threshold = 0.25, min.pct = 0.1)
+ClusterMarker <- ClusterMarker[,c(7,1:6)]
+write.csv(ClusterMarker,'Subset/ClusterMarker.csv', row.names=F)
+#ClusterMarker <- read.csv('Subset/ClusterMarker.csv')
+#提取差异显著的marker genes
+top = 15   #可根据需要调整
+TopMarkers1 <- ClusterMarker %>% filter(p_val_adj == 0) %>% group_by(cluster) %>% 
+               top_n(n = top, wt = avg_logFC)
+TopMarkers2 <- ClusterMarker %>% filter(p_val_adj < 0.01) %>% group_by(cluster) %>%
+               top_n(n = top, wt = avg_logFC)
+TopMarkers <- rbind(TopMarkers1, TopMarkers2) %>% unique.matrix() %>% arrange(cluster)
+write.csv(TopMarkers,'Subset/TopMarkers.csv', row.names=F)
+
+##提取没有核糖体的Markers
+ClusterMarker_noRibo <- ClusterMarker[!grepl("^RP[SL]", 
+                                             ClusterMarker$gene, ignore.case = F),]
+top = 15   #可根据需要调整
+TopMarkers1 <- ClusterMarker_noRibo %>% filter(p_val_adj == 0) %>% 
+               group_by(cluster) %>% top_n(n = top, wt = avg_logFC)
+TopMarkers2 <- ClusterMarker_noRibo %>% filter(p_val_adj < 0.01) %>% 
+               group_by(cluster) %>% top_n(n = top, wt = avg_logFC)
+TopMarkers_noRibo <- rbind(TopMarkers1, TopMarkers2) %>% unique.matrix() %>% 
+                     arrange(cluster)
+write.csv(TopMarkers_noRibo,'Subset/TopMarkers_noRibo.csv', row.names=F)
+
+##导出一个方便对比的表格(每行一个cluster的marker gene)
+TopMarkers2Lines(data = TopMarkers_noRibo, output = "Subset")
+
+##辅助查找marker基因
+source("Resource/MarkerGeneList.R")
+source("Resource/function.R")
+#TopMarkers_noRibo <- read.csv('Subset/TopMarkers_noRibo.csv')
+MatchMarkerGene(data=TopMarkers_noRibo, output = "Subset")
+
+##使用main.celltype作为参考
+p1 <- DimPlot(scRNAsub, reduction = "umap", label = T) + NoLegend()
+p2 <- DimPlot(scRNAsub, reduction = "umap", label = T, label.size = 2.5,
+              group.by = "main.celltype") + NoLegend()
+pc = p1|p2
+ggsave("Subset/CellType_Ref.png", pc, width = 10, height = 4)
+
+##导入人工鉴定结果
+cell.type <- c("CD4 Tnai/cm", "Treg", "T unknow1", "CD8 Trm/Tc", "CD4 Tem", 
+               "CD8 T MT-hi", "MAIT", "T HSP-hi", "Tex", "Tc", "T unknow2", 
+               "CD8 Tem", "ISG+ B", "Cyc NK-T")
+Idents(scRNAsub) <- "seurat_clusters"
+names(cell.type) <- levels(scRNAsub)
+scRNAsub <- RenameIdents(scRNAsub, cell.type)
+scRNAsub$celltype <- Idents(scRNAsub)
+Idents(scRNAsub) <- "seurat_clusters"
+
+##鉴定结果可视化
+p1 <- DimPlot(scRNAsub, reduction = "umap", label = T) + NoLegend()
+p2 <- DimPlot(scRNAsub, reduction = "umap", label = T, label.size = 2.5,
+              group.by = "celltype") + NoLegend()
+pc = p1|p2
+ggsave("Subset/CellType_Custom.png", pc, width = 10, height = 4)
+
+DimPlot(scRNAsub, reduction = 'umap', group.by = 'celltype', 
+        split.by = 'orig.ident', ncol = 4)
+
+##保存结果
+save(scRNAsub, file = "Subset/scRNAsub_classify.Rdata")
+
+
+##===结果可视化===##
+##Stackbar细胞丰度柱状图
+tmp <- select(scRNAsub@meta.data, c("orig.ident", "celltype"))
+df <- data.frame()
+for(i in unique(tmp$orig.ident)){
+  df_i <- subset(tmp, tmp$orig.ident==i) %>% pull(celltype) %>% table()
+  df_i <- data.frame(sample=rep(i, length(df_i)), value=df_i)
+  names(df_i) <- c("sample", "celltype", "value")
+  df <- rbind(df, df_i)
+}
+source("Resource/function.R")
+#按样本统计细胞类型
+p <- ggplot(df, aes(x=sample, y=value, fill=celltype)) + 
+      geom_bar(stat= "identity", position = "fill") + 
+      scale_fill_manual(values = col21) +
+      labs(x = 'Samples', y = 'Relative Abundance', title = 'Samples composition') +
+      theme(panel.grid = element_blank(), panel.background = element_blank(), 
+            axis.text.x = element_text(angle=45))
+ggsave('Subset/Stackbar_celltype.png', p, width = 8, height = 4.5)
+#按细胞类型统计样本
+p <- ggplot(df, aes(x=celltype, y=value, fill=sample)) + 
+      geom_bar(stat= "identity", position = "fill") + 
+      scale_fill_manual(values = col21) +
+      labs(x = 'Cell type', y = 'Relative Abundance', title = 'Source of cell type') +
+      theme(panel.grid = element_blank(), panel.background = element_blank(), 
+           axis.text.x = element_text(angle=45))
+ggsave('Subset/Stackbar_sample.png', p, width = 8, height = 4.5)
+
+##Marker基因可视化
+Idents(scRNAsub) <- "celltype"
+markers <- c("CCR7", "FOXP3", "CD8A", "GZMK", "NKG7", "GNLY", "TIMP1", "MT-ND3",
+             "KLRB1", "HSPA1A", "ICA1", "PLCG2", "ISG15", "STMN1")
+markers <- CaseMatch(markers, rownames(scRNAsub))
+
+## Featureplot标注marker基因
+p <- FeaturePlot(scRNAsub, reduction = "umap", features = markers, ncol = 4)
+ggsave("Subset/Markers_features.png", p, width = 12, height = 10)
+
+#Heatmap图
+p <- DoHeatmap(scRNAsub, features = markers, size = 4)
+ggsave("Subset/Markers_heatmap.png", width = 12, height = 7)
+
+#Marker基因气泡图
+p <- DotPlot(scRNAsub, features = markers) + 
+        theme(axis.text.x = element_text(angle=45, vjust = 0.6))
+ggsave("Subset/Markers_dotplot.png", width = 12, height = 6)
+
+##Marker基因小提琴图
+p <- VlnPlot(scRNAsub, features = markers, pt.size = 0, stack = T)
+ggsave("Subset/Markers_vlnplot.png", width = 10, height = 6)
+
+}
+
+##=================================================================##
+##==================第四节：拟时轨迹分析===========================##
+##=================================================================##
+if(T){
+library(Seurat)
+library(monocle)
+library(tidyverse)
+library(patchwork)
+rm(list=ls())
+dir.create("Monocle")
+
+##===monocle===##
+# monocle不能基于整合的数据进行分析，个人不建议用于多样本分析
+
+##创建monocle分析对象
+load("Subset/scRNAsub_classify.Rdata")
+Idents(scRNAsub) <- "orig.ident"
+scRNAsub <- subset(scRNAsub, idents = 'HNC20TIL')
+dim(scRNAsub)
+# monocle不推荐使用slot="data"
+data <- GetAssayData(scRNAsub, assay = "RNA", slot = "counts")
+#data <- as(data, 'sparseMatrix')   #将普通矩阵转为稀疏矩阵
+pd <- new('AnnotatedDataFrame', data = scRNAsub@meta.data)
+fData <- data.frame(gene_short_name = row.names(data), row.names = row.names(data))
+fd <- new('AnnotatedDataFrame', data = fData)
+mycds <- newCellDataSet(data,
+                        phenoData = pd,
+                        featureData = fd,
+                        lowerDetectionLimit = 0.5,
+                        expressionFamily = negbinomial.size())
+
+##数据预处理
+mycds <- estimateSizeFactors(mycds)
+mycds <- estimateDispersions(mycds, cores=8)
+
+##选择排序基因
+#确定需要排除与包含的基因
+if(F){
+ex1 <- c(cc.genes$s.genes, cc.genes$g2m.genes)
+ex2 <- grep('^MT-', rownames(scRNAsub), value = T)
+ex3 <- grep('^RP[LS]', rownames(scRNAsub), value = T)
+ex <- unique(c(ex1, ex2, ex3))
+#确定需要加入的基因
+#include <- c('CD3D','CD4','CD8A')
+}
+
+#选择seurat确定的高变基因
+order.genes <- SCTransform(scRNAsub) %>% VariableFeatures()
+#order.genes <- order.genes[!order.genes %in% ex]
+mycds <- setOrderingFilter(mycds, order.genes)
+plot_ordering_genes(mycds)
+#或者由monocle选择高变基因
+if(F){
+disp_table <- dispersionTable(mycds)
+order.genes <- subset(disp_table, mean_expression >= 0.01 & 
+               dispersion_empirical >= 1 * dispersion_fit) %>% 
+               pull(gene_id) %>% as.character()
+#order.genes <- order.genes[!order.genes %in% ex]
+mycds <- setOrderingFilter(mycds, order.genes)
+plot_ordering_genes(mycds)
+}
+
+##降维
+mycds <- reduceDimension(mycds, max_components = 2, method = 'DDRTree')
+
+##排序
+mycds <- orderCells(mycds)
+
+##结果可视化
+#State轨迹分布图
+plot1 <- plot_cell_trajectory(mycds, color_by = "State")
+ggsave("Monocle/Trajectory_State.png", plot = plot1, width = 6, height = 5)
+
+#Celltype轨迹分布图
+plot2 <- plot_cell_trajectory(mycds, color_by = "celltype")
+ggsave("Monocle/Trajectory_Celltype.png", plot = plot2, width = 6, height = 5)
+
+#Pseudotime轨迹图
+plot3 <- plot_cell_trajectory(mycds, color_by = "Pseudotime")
+ggsave("Monocle/Trajectory_Pseudotime.png", plot = plot3, width = 6, height = 5)
+
+#合并作图
+plotc <- plot1|plot2|plot3
+ggsave("Monocle/Trajectory_Combination.png", plot = plotc, width = 10, height = 3.5)
+
+#分面图
+p <- plot_cell_trajectory(mycds, color_by = "celltype") + facet_wrap(~celltype, nrow = 3)
+ggsave("Monocle/Trajectory_Facet.png", plot = p, width = 10, height = 10)
+
+##保存结果
+write.csv(pData(mycds), "Monocle/pseudotime.csv")
+save(mycds, file = "Monocle/mycds.Rdata")
+
+##指定基因的可视化
+s.genes <- c("ITGB1","CCR7","FOXP3","GNLY")
+p1 <- plot_genes_jitter(mycds[s.genes,], grouping = "State", color_by = "State")
+p2 <- plot_genes_violin(mycds[s.genes,], grouping = "State", color_by = "State")
+p3 <- plot_genes_in_pseudotime(mycds[s.genes,], color_by = "State")
+plotc <- p1|p2|p3
+ggsave("Monocle/Genes_Jitterplot.png", plot = plotc, width = 9, height = 4.5)
+
+##寻找拟时差异基因。不要使用多核运算，可能警告：关闭不再使用的链结
+#拟时差异基因分析
+Time_diff <- differentialGeneTest(mycds[order.genes,], cores = 1, 
+                                  fullModelFormulaStr = "~sm.ns(Pseudotime)")
+Time_diff <- Time_diff[,c(5,2,3,4,1,6)]
+write.csv(Time_diff, "Monocle/Time_diff_all.csv", row.names = F)
+
+#显著差异基因的作图
+Time_genes <- top_n(Time_diff, n = 100, desc(qval)) %>% 
+              pull(gene_short_name) %>% as.character()
+p = plot_pseudotime_heatmap(mycds[Time_genes,], num_clusters=5,
+                             show_rownames=T, return_heatmap=T)
+ggsave("Monocle/Time_heatmap.png", p, width = 5, height = 10)
+
+#显著差异基因按热图结果排序并保存
+hp.genes <- p$tree_row$labels[p$tree_row$order]
+Time_diff_sig <- Time_diff[hp.genes, c("gene_short_name", "pval", "qval")]
+write.csv(Time_diff_sig, "Monocle/Time_diff_sig.csv", row.names = F)
+
+## BEAM分析
+beam_res <- BEAM(mycds[order.genes,], branch_point = 1, cores = 16)
+beam_res  <- beam_res[,c(5,2,3,4,1,6)]
+write.csv(beam_res, "Monocle/BEAM_all.csv", row.names = F)
+BEAM_genes <- top_n(beam_res, n = 100, desc(qval)) %>% 
+              pull(gene_short_name) %>% as.character()
+p <- plot_genes_branched_heatmap(mycds[BEAM_genes,],  branch_point = 1, 
+              num_clusters = 3, show_rownames = T, return_heatmap = T)
+ggsave("Monocle/BEAM_heatmap.png", p$ph_res, width = 6.5, height = 10)
+
+
+#显著差异基因按热图结果排序并保存
+hp.genes <- p$ph_res$tree_row$labels[p$ph_res$tree_row$order]
+BEAM_sig <- beam_res[hp.genes, c("gene_short_name", "pval", "qval")]
+write.csv(BEAM_sig, "Monocle/BEAM_sig.csv", row.names = F)
+
+
+##===monocle3===##
+library(Seurat)
+library(monocle3)
+library(tidyverse)
+library(patchwork)
+rm(list=ls())
+dir.create("Monocle3")
+
+##创建CDS对象并预处理数据
+load("Subset/scRNAsub_classify.Rdata")
+data <- GetAssayData(scRNAsub, assay = 'RNA', slot = 'counts')
+cell_metadata <- scRNAsub@meta.data
+gene_annotation <- data.frame(gene_short_name = rownames(data))
+rownames(gene_annotation) <- rownames(data)
+cds <- new_cell_data_set(data,
+                         cell_metadata = cell_metadata,
+                         gene_metadata = gene_annotation)
+#preprocess_cds函数相当于seurat中NormalizeData+ScaleData+RunPCA
+cds <- preprocess_cds(cds, num_dim = 50)
+#umap降维
+cds <- reduce_dimension(cds, preprocess_method = "PCA")
+p1 <- plot_cells(cds, reduction_method="UMAP", color_cells_by="celltype") + ggtitle('cds.umap')
+
+##从seurat导入整合过的umap坐标
+cds.embed <- cds@int_colData$reducedDims$UMAP
+int.embed <- Embeddings(scRNAsub, reduction = "umap")
+int.embed <- int.embed[rownames(cds.embed),]
+cds@int_colData$reducedDims$UMAP <- int.embed
+p2 <- plot_cells(cds, reduction_method="UMAP", color_cells_by="celltype") + ggtitle('int.umap')
+p = p1 + p2
+ggsave("Monocle3/Reduction_Compare.png", plot = p, width = 8, height = 4)
+
+## Monocle3聚类分区
+cds <- cluster_cells(cds)
+p1 <- plot_cells(cds, show_trajectory_graph = FALSE) + ggtitle("label by clusterID")
+p2 <- plot_cells(cds, color_cells_by = "partition", show_trajectory_graph = FALSE) + 
+        ggtitle("label by partitionID")
+p = wrap_plots(p1, p2)
+ggsave("Monocle3/Cluster_Partition.png", plot = p, width = 8, height = 4)
+
+## 识别轨迹
+cds <- learn_graph(cds)
+p = plot_cells(cds, label_groups_by_cluster = FALSE, label_leaves = FALSE, 
+               label_branch_points = FALSE)
+ggsave("Monocle3/Trajectory.png", plot = p, width = 8, height = 6)
+
+## 细胞按拟时排序
+#cds <- order_cells(cds) #存在bug
+#下面的p来自识别轨迹的分析结果
+p + geom_vline(xintercept = seq(3,4,0.2)) + geom_hline(yintercept = seq(3,4,0.2))
+embed <- data.frame(Embeddings(scRNAsub, reduction = "umap"))
+embed <- subset(embed, UMAP_1 > 3.25 & UMAP_1 < 3.35 & UMAP_2 > 3.85 & UMAP_2 < 3.95)
+rownames(embed)
+cds <- order_cells(cds, root_cells = "Tonsil1_CGATGGCTCCATTCTA-1")
+p = plot_cells(cds, color_cells_by = "pseudotime", label_cell_groups = FALSE, 
+               label_leaves = FALSE,  label_branch_points = FALSE)
+ggsave("Monocle3/Trajectory_Pseudotime.png", plot = p, width = 8, height = 6)
+save(cds, file = "Monocle3/cds.Rdata")
+
+##寻找拟时轨迹差异基因
+#graph_test分析最重要的结果是莫兰指数（morans_I），其值在-1至1之间，0代表此基因没有
+#空间共表达效应，1代表此基因在空间距离相近的细胞中表达值高度相似。
+Track_genes <- graph_test(cds, neighbor_graph="principal_graph", cores=16)
+Track_genes <- Track_genes[,c(5,2,3,4,1,6)] %>% filter(q_value < 1e-3)
+write.csv(Track_genes, "Monocle3/Trajectory_genes.csv", row.names = F)
+
+#挑选top10画图展示
+Track_genes_sig <- Track_genes %>% top_n(n=10, morans_I) %>%
+                   pull(gene_short_name) %>% as.character()
+#基因表达趋势图
+p <- plot_genes_in_pseudotime(cds[Track_genes_sig,], color_cells_by="celltype", 
+                         min_expr=0.5, ncol = 2)
+ggsave("Monocle3/Genes_Jitterplot.png", plot = p, width = 8, height = 6)
+
+#FeaturePlot图
+p <- plot_cells(cds, genes=Track_genes_sig, show_trajectory_graph=FALSE,
+                label_cell_groups=FALSE,  label_leaves=FALSE)
+p$facet$params$ncol <- 2
+ggsave("Monocle3/Genes_Featureplot.png", plot = p, width = 8, height = 15)
+
+##寻找共表达基因模块
+Track_genes <- read.csv("Monocle3/Trajectory_genes.csv")
+genelist <- pull(Track_genes, gene_short_name) %>% as.character()
+gene_module <- find_gene_modules(cds[genelist,], resolution=1e-2, cores = 16)
+write.csv(gene_module, "Monocle3/Genes_Module.csv", row.names = F)
+cell_group <- tibble::tibble(cell=row.names(colData(cds)), 
+                                cell_group=colData(cds)$celltype)
+agg_mat <- aggregate_gene_expression(cds, gene_module, cell_group)
+row.names(agg_mat) <- stringr::str_c("Module ", row.names(agg_mat))
+p <- pheatmap::pheatmap(agg_mat, scale="column", clustering_method="ward.D2")
+ggsave("Monocle3/Genes_Module.png", plot = p, width = 8, height = 8)
+
+##提取拟时分析结果返回seurat对象
+pseudotime <- pseudotime(cds, reduction_method = 'UMAP')
+pseudotime <- pseudotime[rownames(scRNAsub@meta.data)]
+scRNAsub$pseudotime <- pseudotime
+p = FeaturePlot(scRNAsub, reduction = "umap", features = "pseudotime")
+ggsave("Monocle3/Pseudotime_Seurat.png", plot = p, width = 6, height = 4)
+save(scRNAsub, file = "Subset/scRNAsub_pseudotime.Rdata")
+
+}
+
+##=================================================================##
+##==================第五节：差异与富集分析=========================##
+##=================================================================##
+if(T){
+  
+library(Seurat)
+library(tidyverse)
+library(clusterProfiler)
+library(patchwork)
+dir.create("DEA_FUN")
+rm(list=ls())
+
+##===单细胞水平差异分析===##
+load("scRNA_classify.Rdata")
+DimPlot(scRNA, reduction = 'umap', group.by = 'seurat_clusters', label = T)
+table(scRNA$orig.ident)
+
+##提取需要分析的细胞
+cells1 <- subset(scRNA@meta.data, seurat_clusters %in% c(3,9,15,17) &
+           orig.ident %in% c("HNC01TIL", "HNC10TIL", "HNC20TIL")) %>% rownames()
+cells2 <- subset(scRNA@meta.data, seurat_clusters %in% c(3,9,15,17) &
+           orig.ident %in% c("HNC01PBMC", "HNC10PBMC", "HNC20PBMC")) %>% rownames()
+deg <- FindMarkers(scRNA, ident.1 = cells1, ident.2 = cells2, assay = 'SCT')
+deg <- data.frame(gene = rownames(deg), deg)
+deg <- filter(deg, p_val_adj<0.05) %>% arrange(desc(avg_logFC))
+write.csv(deg, "DEA_FUN/DEG_pbmc_mono.csv", row.names = F)
+
+##参数测试
+if(F){
+deg1 <- FindMarkers(scRNA, ident.1 = cells1, ident.2 = cells2, assay = 'SCT')
+deg1 <- data.frame(gene = rownames(deg1), deg1)
+
+deg2 <- FindMarkers(scRNA, ident.1 = cells1, ident.2 = cells2, assay = 'SCT',
+                    slot = 'counts', test.use = "DESeq2")
+deg2 <- data.frame(gene = rownames(deg2), deg2)
+
+deg3 <- FindMarkers(scRNA, ident.1 = cells1, ident.2 = cells2, assay = 'RNA',
+                    slot = 'counts', test.use = "DESeq2")
+deg3 <- data.frame(gene = rownames(deg3), deg3)
+
+deg4 <- FindMarkers(scRNA, ident.1 = cells1, ident.2 = cells2, assay = 'SCT',
+                    slot = 'data', test.use = "DESeq2")
+deg4 <- data.frame(gene = rownames(deg4), deg4)
+
+#qvalue过滤
+deg1 <- filter(deg1, p_val_adj<0.05)
+deg2 <- filter(deg2, p_val_adj<0.05)
+deg3 <- filter(deg3, p_val_adj<0.05)
+deg4 <- filter(deg4, p_val_adj<0.05)
+
+#venn图对比
+library(VennDiagram)
+p <- venn.diagram(list(deg1=deg1$gene, deg2=deg2$gene, deg3=deg3$gene, deg4=deg4$gene),
+                  col = "transparent",
+                  fill = c("cornflowerblue", "green", "yellow", "darkorchid1"),
+                  cat.col = "darkblue",
+                  category.names=c("deg1", "deg2", "deg3", "deg4"), 
+                  alpha = 0.5, 
+                  rotation.degree = 0,
+                  cat.cex = 2.5, 
+                  cat.dist = c(0.20, 0.20, 0.1, 0.1), 
+                  cex =1.5, 
+                  filename = NULL,
+                  margin=0.2)    
+png(file="DEA_FUN/Venn_deg_test4.png", width=1000, height=1000)
+grid.draw(p)
+dev.off()
+
+p <- venn.diagram(list(deg2=deg2$gene, deg3=deg3$gene, deg4=deg4$gene),
+                  col = "transparent",
+                  fill = c("cornflowerblue", "green", "darkorchid1"),
+                  cat.col = "darkblue",
+                  category.names=c("deg2", "deg3", "deg4"), 
+                  alpha = 0.5, 
+                  rotation.degree = 0,
+                  cat.cex = 2.5, 
+                  cat.dist = c(0.08, 0.03, 0.05), 
+                  cex =1.5, 
+                  filename = NULL,
+                  margin=0.2)    
+png(file="DEA_FUN/Venn_deg_test3.png", width=1000, height=1000)
+grid.draw(p)
+dev.off()
+}
+genelist <- pull(deg, gene) %>% as.character()
+
+## GO&KEGG富集分析
+#GO
+ego_ALL <- enrichGO(gene          = genelist,
+                    universe      = rownames(scRNA@assays$SCT@data),
+                    OrgDb         = 'org.Hs.eg.db',
+                    keyType       = 'SYMBOL',
+                    ont           = "ALL",
+                    pAdjustMethod = "BH",
+                    pvalueCutoff  = 0.01,
+                    qvalueCutoff  = 0.05)
+ego_all <- data.frame(ego_ALL)
+write.csv(ego_all,'DEA_FUN/GO_pbmc_mono.csv', row.names = F)           
+ego_CC <- enrichGO(gene          = genelist,
+                   universe      = rownames(scRNA@assays$SCT@data),
+                   OrgDb         = 'org.Hs.eg.db',
+                   keyType       = 'SYMBOL',
+                   ont           = "CC",
+                   pAdjustMethod = "BH",
+                   pvalueCutoff  = 0.01,
+                   qvalueCutoff  = 0.05)
+ego_MF <- enrichGO(gene          = genelist,
+                   universe      = rownames(scRNA@assays$SCT@data),
+                   OrgDb         = 'org.Hs.eg.db',
+                   keyType       = 'SYMBOL',
+                   ont           = "MF",
+                   pAdjustMethod = "BH",
+                   pvalueCutoff  = 0.01,
+                   qvalueCutoff  = 0.05)
+ego_BP <- enrichGO(gene          = genelist,
+                   universe      = rownames(scRNA@assays$SCT@data),
+                   OrgDb         = 'org.Hs.eg.db',
+                   keyType       = 'SYMBOL',
+                   ont           = "BP",
+                   pAdjustMethod = "BH",
+                   pvalueCutoff  = 0.01,
+                   qvalueCutoff  = 0.05)           
+ego_CC@result$Description <- substring(ego_CC@result$Description,1,70)
+ego_MF@result$Description <- substring(ego_MF@result$Description,1,70)
+ego_BP@result$Description <- substring(ego_BP@result$Description,1,70)
+p_BP <- barplot(ego_BP, showCategory = 10) + ggtitle("Biological process")
+p_CC <- barplot(ego_CC, showCategory = 10) + ggtitle("Cellular component")
+p_MF <- barplot(ego_MF, showCategory = 10) + ggtitle("Molecular function")
+plotc <- p_BP/p_CC/p_MF
+ggsave('DEA_FUN/GO_pbmc_mono.png', plotc, width = 12,height = 10)
+
+#KEGG，先把基因名转为ENTREZID
+genelist.k <- bitr(genelist, fromType="SYMBOL", toType="ENTREZID", 
+                   OrgDb='org.Hs.eg.db') %>% pull(ENTREZID)
+ekegg <- enrichKEGG(gene = genelist.k, organism = 'hsa')
+ekegg <- setReadable(ekegg, OrgDb = org.Hs.eg.db, keyType="ENTREZID")
+df.kegg <- data.frame(ekegg)
+write.csv(df.kegg, 'DEA_FUN/KEGG_pbmc_mono.csv', row.names = F)
+p1 <- barplot(ekegg, showCategory=20)
+p2 <- dotplot(ekegg, showCategory=20)
+plotc = p1/p2
+ggsave('DEA_FUN/KEGG_pbmc_mono.png', plot = plotc, width = 12, height = 10)
+
+## GSEA富集分析
+msig.set <- read.gmt("Resource/MSigDB-Entrez/c2.cp.kegg.v7.2.entrez.gmt")
+gene.use <- bitr(genelist, fromType="SYMBOL", toType="ENTREZID", OrgDb='org.Hs.eg.db')
+names(gene.use) <- c("gene", "ENTREZID")
+deg.use <- left_join(gene.use, deg)
+gesa.genelist <- structure(deg.use$avg_logFC, names=deg.use$ENTREZID)
+gsea <- GSEA(gesa.genelist, TERM2GENE = msig.set, minGSSize = 10,
+             maxGSSize = 500, pvalueCutoff = 0.05, verbose=FALSE)
+gsea <- setReadable(gsea, OrgDb = org.Hs.eg.db, keyType="ENTREZID")
+df.gsea <- data.frame(gsea)
+write.csv(df.gsea, 'DEA_FUN/GSEA_pbmc_mono_kegg.csv', row.names = F)
+
+# 批量作图
+dir.create('DEA_FUN/Gsea_Plot')
+for(i in seq_along(gsea@result$ID)){
+  p <- gseaplot(gsea, geneSetID = i, title = gsea@result$ID[i], by = "runningScore")
+  filename <- paste0('DEA_FUN/Gsea_Plot/', gsea@result$ID[i], '.png')
+  ggsave(filename = filename, p, width = 8, height = 4)
+}
+# 美化版
+if(F){
+  library(enrichplot)
+  for(i in seq_along(gsea@result$ID)){
+    p <- gseaplot2(gsea, geneSetID = i, title = gsea@result$ID[i])
+    filename <- paste0('DEA_FUN/Gsea_Plot/pretty_', gsea@result$ID[i], '.png')
+    ggsave(filename = filename, p, width = 8, height = 5)
+  }
+}
+
+
+##===pseudobulk RNA差异分析===##
+library(Seurat)
+library(tidyverse)
+library(DESeq2)
+library(clusterProfiler)
+library(patchwork)
+dir.create("bulkRNA")
+rm(list=ls())
+source("Resource/function.R")
+
+load("scRNA_classify.Rdata")
+DimPlot(scRNA, reduction = 'umap', group.by = 'seurat_clusters', label = T)
+table(scRNA$orig.ident)
+colnames(scRNA@meta.data)
+
+##提取数据
+Idents(scRNA) <- "seurat_clusters"
+s.samples <- c("HNC01TIL", "HNC10TIL", "HNC20TIL", "HNC01PBMC", "HNC10PBMC", "HNC20PBMC")
+s.idents <- c(3,9,15,17)
+bulk.counts <- pseudobulk(scRNA, idents = s.idents, samples = s.samples)
+write.csv(data.frame(Symbol=rownames(bulk.counts), bulk.counts), 
+          file = "bulkRNA/pseudobulk_counts.csv", row.names = F)
+head(bulk.counts)
+
+##差异分析
+data <- data.frame(bulk.counts, stringsAsFactors=F, check.names=F)
+coldata <- data.frame(group = factor(c('TIL', 'TIL', 'TIL', 'PBMC', 'PBMC', 'PBMC')))
+#构建 DESeqDataSet 对象
+dds <- DESeqDataSetFromMatrix(countData = data, colData = coldata, design = ~group)
+dds <- estimateSizeFactors(dds)
+dds <- estimateDispersions(dds)
+dds <- DESeq(dds)
+res <- results(dds, contrast = c('group', 'TIL', 'PBMC'), pAdjustMethod = 'fdr')
+res <- as.data.frame(res)
+DEG <- merge(data, res, by=0)
+names(DEG)[1]='gene'
+DEG <- arrange(DEG, pvalue, desc(log2FoldChange))
+write.csv(DEG, "bulkRNA/DEG.csv", row.names = F)
+DEG.sig <- filter(DEG, pvalue < 0.05 & log2FoldChange > 2)
+write.csv(DEG.sig, "bulkRNA/DEG-sig.csv", row.names = F)
+
+##准备差异基因列表
+genelist <- arrange(DEG.sig, desc(log2FoldChange)) %>% pull(gene) %>% as.character()
+
+## GO&KEGG富集分析
+#GO
+ego_ALL <- enrichGO(gene          = genelist,
+                    universe      = rownames(bulk.counts),
+                    OrgDb         = 'org.Hs.eg.db',
+                    keyType       = 'SYMBOL',
+                    ont           = "ALL",
+                    pAdjustMethod = "BH",
+                    pvalueCutoff  = 0.01,
+                    qvalueCutoff  = 0.05)
+ego_all <- data.frame(ego_ALL)
+write.csv(ego_all,'bulkRNA/GO_pbmc_mono.csv', row.names = F)           
+ego_CC <- enrichGO(gene          = genelist,
+                   universe      = rownames(bulk.counts),
+                   OrgDb         = 'org.Hs.eg.db',
+                   keyType       = 'SYMBOL',
+                   ont           = "CC",
+                   pAdjustMethod = "BH",
+                   pvalueCutoff  = 0.01,
+                   qvalueCutoff  = 0.05)
+ego_MF <- enrichGO(gene          = genelist,
+                   universe      = rownames(bulk.counts),
+                   OrgDb         = 'org.Hs.eg.db',
+                   keyType       = 'SYMBOL',
+                   ont           = "MF",
+                   pAdjustMethod = "BH",
+                   pvalueCutoff  = 0.01,
+                   qvalueCutoff  = 0.05)
+ego_BP <- enrichGO(gene          = genelist,
+                   universe      = rownames(bulk.counts),
+                   OrgDb         = 'org.Hs.eg.db',
+                   keyType       = 'SYMBOL',
+                   ont           = "BP",
+                   pAdjustMethod = "BH",
+                   pvalueCutoff  = 0.01,
+                   qvalueCutoff  = 0.05)           
+ego_CC@result$Description <- substring(ego_CC@result$Description,1,70)
+ego_MF@result$Description <- substring(ego_MF@result$Description,1,70)
+ego_BP@result$Description <- substring(ego_BP@result$Description,1,70)
+p_BP <- barplot(ego_BP, showCategory = 10) + ggtitle("Biological process")
+p_CC <- barplot(ego_CC, showCategory = 10) + ggtitle("Cellular component")
+p_MF <- barplot(ego_MF, showCategory = 10) + ggtitle("Molecular function")
+plotc <- p_BP/p_CC/p_MF
+ggsave('bulkRNA/GO_pbmc_mono.png', plotc, width = 12,height = 10)
+
+#KEGG，先把基因名转为ENTREZID
+genelist.k <- bitr(genelist, fromType="SYMBOL", toType="ENTREZID", 
+                   OrgDb='org.Hs.eg.db') %>% pull(ENTREZID)
+ekegg <- enrichKEGG(gene = genelist.k, organism = 'hsa')
+ekegg <- setReadable(ekegg, OrgDb = org.Hs.eg.db, keyType="ENTREZID")
+df.kegg <- data.frame(ekegg)
+write.csv(df.kegg, 'bulkRNA/KEGG_pbmc_mono.csv', row.names = F)
+p1 <- barplot(ekegg, showCategory=20)
+p2 <- dotplot(ekegg, showCategory=20)
+plotc = p1/p2
+ggsave('bulkRNA/KEGG_pbmc_mono.png', plot = plotc, width = 12, height = 10)
+
+## GSEA富集分析
+msig.set <- read.gmt("Resource/MSigDB-Entrez/c2.cp.kegg.v7.2.entrez.gmt")
+gene.use <- bitr(genelist, fromType="SYMBOL", toType="ENTREZID", OrgDb='org.Hs.eg.db')
+names(gene.use) <- c("gene", "ENTREZID")
+deg.use <- left_join(gene.use, DEG.sig) %>% arrange(desc(log2FoldChange))
+gesa.genelist <- structure(deg.use$log2FoldChange, names=deg.use$ENTREZID)
+gsea <- GSEA(gesa.genelist, TERM2GENE = msig.set, minGSSize = 10,
+             maxGSSize = 500, pvalueCutoff = 0.05, verbose=FALSE)
+gsea <- setReadable(gsea, OrgDb = org.Hs.eg.db, keyType="ENTREZID")
+df.gsea <- data.frame(gsea)
+write.csv(df.gsea, 'bulkRNA/GSEA_pbmc_mono_kegg.csv', row.names = F)
+
+# 批量作图
+dir.create('bulkRNA/Gsea_Plot')
+for(i in seq_along(gsea@result$ID)){
+  p <- gseaplot(gsea, geneSetID = i, title = gsea@result$ID[i], by = "runningScore")
+  filename <- paste0('bulkRNA/Gsea_Plot/', gsea@result$ID[i], '.png')
+  ggsave(filename = filename, p, width = 8, height = 4)
+}
+# 美化版
+if(F){
+  library(enrichplot)
+  for(i in seq_along(gsea@result$ID)){
+    p <- gseaplot2(gsea, geneSetID = i, title = gsea@result$ID[i])
+    filename <- paste0('bulkRNA/Gsea_Plot/pretty_', gsea@result$ID[i], '.png')
+    ggsave(filename = filename, p, width = 8, height = 5)
+  }
+}
+
+}
+
+##=================================================================##
+##==================第六节：转录调控网络分析=======================##
+##=================================================================##
+if(F){
+library(Seurat)
+library(tidyverse)
+library(patchwork)
+library(SCENIC)
+rm(list=ls())
+dir.create("SCENIC")
+dir.create("SCENIC/int")
+setwd("./SCENIC")
+
+##准备scenic输入文件
+load("scRNA_classify.Rdata")
+exprMat <- GetAssayData(scRNA, assay = 'SCT', slot = 'data') %>% as.matrix()
+cellInfo <- data.frame(scRNA@meta.data) %>% dplyr::select(celltype,seurat_clusters)
+saveRDS(cellInfo, file="int/cellInfo.Rds")
+
+mydbDIR <- "../Resource/hg38_scenic/"
+dir(mydbDIR)
+mydbs <- c("hg38__refseq-r80__500bp_up_and_100bp_down_tss.mc9nr.feather",
+           "hg38__refseq-r80__10kb_up_and_down_tss.mc9nr.feather")
+names(mydbs) <- c("500bp", "10kb")
+#小鼠org="mgi"
+scenicOptions <- initializeScenic(org = "hgnc", 
+                               nCores = 16,
+                                dbDir = mydbDIR, 
+                                  dbs = mydbs,
+                         datasetTitle = "HNC")
+saveRDS(scenicOptions, "int/scenicOptions.rds")
+#scenicOptions = readRDS("int/scenicOptions.rds")
+#scenicOptions@settings$nCores <- 10
+
+##如果需要高性能计算服务，请保存以下文件联系Kinesin
+if(F){
+  saveRDS(exprMat, "exprMat.rds")
+  saveRDS(cellInfo, "cellInfo.rds")
+}
+
+##基因过滤
+genesKept <- geneFiltering(exprMat, scenicOptions, 
+                           minCountsPerGene = 0.015 * ncol(exprMat), 
+                           minSamples = ncol(exprMat) * 0.01)
+exprMat_filtered <- exprMat[genesKept, ]
+
+##计算相关性矩阵
+runCorrelation(exprMat_filtered, scenicOptions)
+
+##计算TF-targets相关性
+runGenie3(exprMat_filtered, scenicOptions, nParts = 20)
+
+##推断共表达模块
+runSCENIC_1_coexNetwork2modules(scenicOptions)
+
+##推断转录调控网络（regulon）
+#此步运行时间长且极耗内存，慎用多线程！！！
+scenicOptions@settings$nCores <- 2
+runSCENIC_2_createRegulons(scenicOptions)
+#注意警告信息！！！
+#1: In mclapply(argsList, FUN, mc.preschedule = preschedule, mc.set.seed = set.seed,  :
+#scheduled cores 2, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 did not deliver results, 
+#all values of the jobs will be affected
+#这是因为内存不够，会导致结果异常，需要调整后重新运行！！！
+#19:12	Step 2. Identifying regulons
+#20:54	RcisTarget: Adding motif annotation
+#21:03	RcisTarget: Prunning targets
+#23:23	Number of motifs that support the regulons: 37453
+
+##regulons计算AUC值并进行下游分析
+#此处导入未过滤的表达矩阵
+#此步运行时间快但极耗内存，慎用多线程！！！
+scenicOptions@settings$nCores <- 6
+runSCENIC_3_scoreCells(scenicOptions, exprMat=exprMat)
+runSCENIC_4_aucell_binarize(scenicOptions, exprMat=exprMat)
+
+
+##===利用seurat对scenic结果进行下游分析===##
+##RegulonAUC数据导入seurat对象
+setwd("../")
+load("scRNA_classify.Rdata")
+scRNA$Cluster <- scRNA$seurat_clusters
+Regulon <- readRDS("SCENIC/int/3.4_regulonAUC.Rds")
+Regulon <- Regulon@assays@data@listData$AUC
+Regulon_all <- Regulon[,colnames(scRNA)]
+regulon <- data.frame(Regulons=rownames(Regulon_all), Regulon_all)
+write.csv(regulon, "SCENIC/RegulonAUC.csv", row.names = F)
+Regulon_high <- Regulon[!grepl("extended", rownames(Regulon)),]
+Regulon_low <- Regulon[grepl("extended", rownames(Regulon)),]
+scRNA[["Regulon"]] <- CreateAssayObject(counts = Regulon_high)
+DefaultAssay(scRNA) <- "Regulon"
+dim(scRNA)
+
+##使用regulon降维聚类
+features <- rownames(scRNA@assays$Regulon@counts)
+scRNA <-  ScaleData(scRNA,features=features) %>% RunPCA(features=features)
+ElbowPlot(scRNA)
+pc.num=1:10
+scRNA <- scRNA %>% RunTSNE(dims=pc.num) %>% RunUMAP(dims=pc.num) %>%
+         FindNeighbors(dims = pc.num) %>% FindClusters(resolution=0.8)
+#与细胞类型的鉴定结果对比
+p1 <- DimPlot(scRNA, reduction = "umap", group.by = "celltype", 
+              label = T, label.size = 2) + NoLegend()
+p2 <- DimPlot(scRNA, reduction = "umap", label = T) + NoLegend()
+pc <- p1 + p2 + plot_layout(guides = "collect")        
+ggsave("SCENIC/Reg_Celltype.png", width = 8, height = 4)
+#与表达矩阵的聚类结果对比
+p1 <- DimPlot(scRNA, reduction = "umap", group.by = "Cluster", 
+              label = T, label.size = 3) + NoLegend()
+p2 <- DimPlot(scRNA, reduction = "umap", label = T) + NoLegend()
+pc <- p1 + p2 + plot_layout(guides = "collect")        
+ggsave("SCENIC/Reg_Cluster.png", width = 8, height = 4)
+
+##寻找Marker regulons
+diff.wilcox = FindAllMarkers(scRNA, slot='counts', logfc.threshold = 0.1)
+reg.markers = diff.wilcox %>% select(gene, everything()) %>% filter(p_val<0.05)
+write.csv(reg.markers, "SCENIC/Reg_Markers.csv", row.names = F)
+#绘制热图
+p = DoHeatmap(scRNA, features=pull(reg.markers, gene))
+ggsave("SCENIC/Reg_Markers.png", p, width = 12, height = 6)
+
+##导入二进制regulonAUC矩阵
+binRegulon <- readRDS("SCENIC/int/4.1_binaryRegulonActivity.Rds")
+binRegulon_all <- binRegulon[,colnames(scRNA)]
+binreg <- data.frame(binRegulon=rownames(binRegulon_all), binRegulon_all)
+write.csv(binreg, "SCENIC/binRegulon.csv")
+binRegulon_high <- binRegulon[!grepl("extended", rownames(binRegulon)),]
+binRegulon_low <- binRegulon[grepl("extended", rownames(binRegulon)),]
+scRNA[["binRegulon"]] <- CreateAssayObject(counts = binRegulon_high)
+DefaultAssay(scRNA) <- "binRegulon"
+#绘制热图
+p = DoHeatmap(scRNA, features=pull(reg.markers, gene), slot = "counts")
+ggsave("SCENIC/binRegulon.png", p, width = 12, height = 6)
+
+##指定细胞的差异分析
+DefaultAssay(scRNA) <- "Regulon"
+cells1 <- subset(scRNA@meta.data, Cluster %in% c(3,9,15,17) &
+                   orig.ident %in% c("HNC01TIL", "HNC10TIL", "HNC20TIL")) %>% rownames()
+cells2 <- subset(scRNA@meta.data, Cluster %in% c(3,9,15,17) &
+                   orig.ident %in% c("HNC01PBMC", "HNC10PBMC", "HNC20PBMC")) %>% rownames()
+deg.reg <- FindMarkers(scRNA, ident.1 = cells1, ident.2 = cells2, assay = "Regulon", 
+                       slot = "counts", logfc.threshold = 0, min.pct = 0)
+deg.reg <- data.frame(Regulon = rownames(deg.reg), deg.reg)
+deg.reg <- filter(deg.reg, p_val<0.05) %>% arrange(desc(avg_logFC))
+write.csv(deg.reg, "SCENIC/DEG-Reg_pbmc_mono.csv", row.names = F)
+p = FeaturePlot(scRNA, features = "JUN (28g)", reduction = "umap")
+ggsave("SCENIC/Reg_JUN-28g.png", p, width = 6, height = 4)
+save(scRNA, file = "scRNA_reg.Rdata")
+}
+
+

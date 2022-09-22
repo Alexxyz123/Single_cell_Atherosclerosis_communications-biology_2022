@@ -1,0 +1,24 @@
+{
+    "id": "14C11815",
+    "path": "~/single-cell/data/scRNA/02_data_merge_and_batch.R",
+    "project_path": "02_data_merge_and_batch.R",
+    "type": "r_source",
+    "hash": "2515207628",
+    "contents": "",
+    "dirty": false,
+    "created": 1660724049899.0,
+    "source_on_save": false,
+    "relative_order": 3,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1637669695,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1637669695,
+    "read_only": false,
+    "read_only_alternatives": []
+}

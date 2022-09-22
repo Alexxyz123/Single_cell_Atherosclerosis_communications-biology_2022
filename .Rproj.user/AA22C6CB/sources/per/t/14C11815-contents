@@ -1,0 +1,126 @@
+####加载包
+library(Seurat)
+library(tidyverse)
+library(SingleR)
+library(harmony)
+library(patchwork)
+dir.create("Overview")
+rm(list=ls())
+#####加载数据
+load("scRNA_QC.Rdata")
+####降维聚类####
+scRNA <- RunPCA(scRNA, verbose = F)
+ElbowPlot(scRNA, ndims = 50)
+pc.num=1:30
+scRNA <- scRNA %>% RunTSNE(dims=pc.num) %>% RunUMAP(dims=pc.num) %>%
+  FindNeighbors(dims = pc.num) %>% FindClusters(resolution=0.3)
+
+#####查看批次效应######
+scRNA$batches <- scRNA$orig.ident
+scRNA$batches <- recode(scRNA$batches, 
+                        'AC_01' = "batch1", 
+                        'PA_01' = "batch1",
+                        'AC_02'= "batch2",
+                        'PA_02' = "batch2",
+                        'AC_03' = "batch3",
+                        'PA_03' = "batch3",)
+p1 <- DimPlot(scRNA, reduction = "tsne", group.by = "batches")
+p2 <- DimPlot(scRNA, reduction = "umap", group.by = "batches")
+pc = p1 + p2 + plot_layout(guides = "collect")
+ggsave("Overview/batch_overview.png", pc, width = 8, height = 4)
+#发现不同的病人的细胞大概映射在相同区域
+####比较正常组和对照组的UMAP和t-SNE#####
+scRNA$group <- scRNA$orig.ident
+scRNA$group <- recode(scRNA$group, 
+                        'AC_01' = "AC", 
+                        'PA_01' = "PA",
+                        'AC_02'= "AC",
+                        'PA_02' = "PA",
+                        'AC_03' = "AC",
+                        'PA_03' = "PA")
+p1 <- DimPlot(scRNA, reduction = "tsne", group.by = "group")
+p2 <- DimPlot(scRNA, reduction = "umap", group.by = "group")
+pc = p1 + p2 + plot_layout(guides = "collect")
+ggsave("Overview/batch_group.png", pc, width = 8, height = 4)
+#####查看细胞周期######
+#细胞周期评分绘制小提琴图
+theme.set2 = theme(axis.title.x=element_blank())
+plot.featrures = c("S.Score", "G2M.Score")
+plots = list()
+for(i in seq_along(plot.featrures)){
+  plots[[i]] = VlnPlot(scRNA, group.by="seurat_clusters", pt.size = 0,
+                       features = plot.featrures[i]) + theme.set2 + NoLegend()}
+violin <- wrap_plots(plots = plots, nrow=2)    
+ggsave("Overview/CellCycle_violin.png", plot = violin, width = 8, height = 6)  
+#发现第14群最高，为T细胞群，考虑T细胞群炎症反应
+#PD-1, TIM-3, LAG-3 and CTLA-4，四个基因越低提示T细胞耗竭
+#绘制tsne和umap图，细胞周期分群
+p1 <- DimPlot(scRNA, reduction = "tsne", group.by = "Phase")
+p2 <- DimPlot(scRNA, reduction = "umap", group.by = "Phase")
+pc = p1 + p2 + plot_layout(guides = "collect")
+ggsave("Overview/CellCycle_dimplot.png", pc, width = 8, height = 4)
+#####SCT标准化与harmony批次校正#####
+dir.create("Harmony")
+##SCT标准化数据
+scRNA <- SCTransform(scRNA, return.only.var.genes = T, 
+                     vars.to.regress = c("S.Score", "G2M.Score"))
+
+##使用harmony整合数据
+# scRNA <- RunPCA(scRNA, npcs=50, verbose=FALSE)
+# scRNA <- RunHarmony(scRNA, group.by.vars="orig.ident", assay.use="SCT")
+#按照每个样本进行分类
+scRNA <- RunHarmony(scRNA, group.by.vars="batches", assay.use="SCT")
+ElbowPlot(scRNA, ndims = 50)
+pc.num=1:30
+
+###降维聚类,找到最佳resolution######
+##非线性降维与聚类
+scRNA <- RunTSNE(scRNA, reduction="harmony", dims=pc.num) %>% 
+  RunUMAP(reduction="harmony", dims=pc.num) %>%
+  FindNeighbors(reduction="harmony", dims=pc.num) %>% 
+  FindClusters(resolution =c(seq(0.4,1.6,0.2)))
+#查看每群的细胞数
+table(scRNA$seurat_clusters)
+#找到最佳的resolution，clusteree包
+library(clustree)
+cluster_tree <- clustree(scRNA@meta.data, prefix = "SCT_snn_res.")
+ggsave("Harmony/Harmony_cluster.png", cluster_tree, width = 8, height = 8)
+##查看harmony的整合效果
+p1 <- DimPlot(scRNA, reduction = "tsne", group.by = "orig.ident")
+p2 <- DimPlot(scRNA, reduction = "umap", group.by = "orig.ident")
+pc = p1 + p2 + plot_layout(guides = "collect")
+ggsave("Harmony/Harmony_integr.png", pc, width = 8, height = 4)
+#使用分面图查看效果
+p <- DimPlot(scRNA, reduction = "umap", group.by = "orig.ident", 
+             split.by = "orig.ident", ncol = 3) + NoLegend()
+ggsave("Harmony/Harmony_facet.png", p, width = 9, height = 12)
+##Harmony之后疾病组和正常组
+p1 <- DimPlot(scRNA, reduction = "tsne", group.by = "group")
+p2 <- DimPlot(scRNA, reduction = "umap", group.by = "group")
+pc = p1 + p2 + plot_layout(guides = "collect")
+ggsave("Harmony/Harmony_group.png", pc, width = 8, height = 4)
+
+##SingleR鉴定细胞类型
+source("Resource/function.R")
+refdata <- get(load("Resource/SingleR_ref/ref_Human_all.RData"))
+###dim(scRNA) 21444*44298需要7分钟注释
+scRNA <- cell_identify(scRNA, refdata, output = "Harmony")
+
+##tSNE图展示结果
+p1 <- DimPlot(scRNA, reduction = "tsne", label = T,group.by = "SCT_snn_res.0.4")+
+  NoLegend()
+p2 <- DimPlot(scRNA, reduction = "tsne", label = T,
+              group.by = "SingleR") + NoLegend()
+pc = p1|p2
+ggsave("Harmony/tSNE_harmony.png", pc, width = 8, height = 4)
+
+##UMAP图展示结果
+p1 <- DimPlot(scRNA, reduction = "umap", label = T,group.by = "SCT_snn_res.0.4")+
+  NoLegend()
+p2 <- DimPlot(scRNA, reduction = "umap", label = T,
+              group.by = "SingleR") + NoLegend()
+pc = p1|p2
+ggsave("Harmony/UMAP_harmony.png", pc, width = 8, height = 4)
+
+##保存结果####
+save(scRNA, file = "scRNA_harmony.Rdata")  

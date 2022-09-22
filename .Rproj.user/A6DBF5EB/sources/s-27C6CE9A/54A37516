@@ -1,0 +1,25 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1608108522560.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "0",
+    "id" : "54A37516",
+    "lastKnownWriteTime" : 1606552217,
+    "last_content_update" : 1606552217,
+    "path" : "D:/Study/docker_镜像/scRNA20201128.R",
+    "project_path" : null,
+    "properties" : {
+        "cursorPosition" : "98,6",
+        "scrollLine" : "91"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 2,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

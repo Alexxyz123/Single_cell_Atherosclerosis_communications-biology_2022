@@ -1,0 +1,27 @@
+{
+    "id": "21E23C8E",
+    "path": "~/single-cell/data/scRNA/12_revision.R",
+    "project_path": "12_revision.R",
+    "type": "r_source",
+    "hash": "3203534892",
+    "contents": "",
+    "dirty": true,
+    "created": 1636436099562.0,
+    "source_on_save": false,
+    "relative_order": 4,
+    "properties": {
+        "tempName": "Untitled1",
+        "source_window_id": "",
+        "Source": "Source",
+        "cursorPosition": "43,77",
+        "scrollLine": "36"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1636436112,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1636436460079,
+    "read_only": false,
+    "read_only_alternatives": []
+}

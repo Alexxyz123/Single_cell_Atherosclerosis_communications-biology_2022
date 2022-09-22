@@ -1,0 +1,26 @@
+{
+    "collab_server" : "",
+    "contents" : "",
+    "created" : 1608109337577.000,
+    "dirty" : false,
+    "encoding" : "UTF-8",
+    "folds" : "",
+    "hash" : "4018277886",
+    "id" : "C5858647",
+    "lastKnownWriteTime" : 1608116118,
+    "last_content_update" : 1608116118752,
+    "path" : "D:/Study/single cell/data/scRNA/01_data quality control.R",
+    "project_path" : "01_data quality control.R",
+    "properties" : {
+        "cursorPosition" : "61,0",
+        "scrollLine" : "46",
+        "tempName" : "Untitled2"
+    },
+    "read_only" : false,
+    "read_only_alternatives" : [
+    ],
+    "relative_order" : 4,
+    "source_on_save" : false,
+    "source_window" : "",
+    "type" : "r_source"
+}

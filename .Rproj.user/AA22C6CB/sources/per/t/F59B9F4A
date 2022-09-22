@@ -1,0 +1,24 @@
+{
+    "id": "F59B9F4A",
+    "path": "~/single-cell/data/scRNA/01_SCTtransform_quality_control.R",
+    "project_path": "01_SCTtransform_quality_control.R",
+    "type": "r_source",
+    "hash": "1850049157",
+    "contents": "",
+    "dirty": false,
+    "created": 1660724048565.0,
+    "source_on_save": false,
+    "relative_order": 2,
+    "properties": {
+        "source_window_id": "",
+        "Source": "Source"
+    },
+    "folds": "",
+    "lastKnownWriteTime": 1651583469,
+    "encoding": "UTF-8",
+    "collab_server": "",
+    "source_window": "",
+    "last_content_update": 1651583469,
+    "read_only": false,
+    "read_only_alternatives": []
+}
